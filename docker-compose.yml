@@ -5,6 +5,8 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
+      - ./index.faiss:/app/index.faiss
+      - ./index_metadata.pkl:/app/index_metadata.pkl
     env_file:
       - .env
     environment:
