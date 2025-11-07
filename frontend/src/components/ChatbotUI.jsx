@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { sendMessage } from '../services/apiService';
 
 function ChatbotUI() {
@@ -73,7 +74,11 @@ function ChatbotUI() {
         {messages.map((message) => (
           <div key={message.id} className={`message ${message.sender}-message`}>
             <span className={`message-text ${message.isError ? 'error-message' : ''}`}>
-              {message.text}
+              {message.sender === 'bot' ? (
+                <ReactMarkdown>{message.text}</ReactMarkdown>
+              ) : (
+                message.text
+              )}
             </span>
           </div>
         ))}
