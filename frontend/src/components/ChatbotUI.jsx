@@ -38,25 +38,35 @@ function ChatbotUI() {
     setIsLoading(true);
     setShowWelcome(false);
 
+    const botMessageId = Date.now() + 1;
+    const botMessage = {
+      id: botMessageId,
+      text: "",
+      sender: "bot",
+    };
+
+    setMessages((prev) => [...prev, botMessage]);
+
     try {
-      const botResponse = await sendMessage(userMessage.text, flowId);
-
-      const botMessage = {
-        id: Date.now() + 1,
-        text: botResponse,
-        sender: "bot",
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
+      await sendMessage(userMessage.text, flowId, (chunk) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === botMessageId ? { ...msg, text: msg.text + chunk } : msg
+          )
+        );
+      });
     } catch (error) {
-      const errorMessage = {
-        id: Date.now() + 1,
-        text: "Sorry, I'm having trouble responding right now. Please try again.",
-        sender: "bot",
-        isError: true,
-      };
-
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === botMessageId
+            ? {
+                ...msg,
+                text: "Sorry, I'm having trouble responding right now. Please try again.",
+                isError: true,
+              }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
