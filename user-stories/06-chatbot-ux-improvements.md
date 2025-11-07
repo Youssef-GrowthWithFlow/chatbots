@@ -1,9 +1,3 @@
-You are absolutely right. My mistake. User Stories should always be in English for clarity and consistency.
-
-Here is the corrected version.
-
-File: 06-ux-improvements.md
-
 User Story 6: UX Improvements (Tone, Formatting, & Responsive)
 
 Why: As a user, I want the chatbot to be pleasant to read and easy to use on any device, so I have a clear and professional experience.

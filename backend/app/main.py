@@ -28,6 +28,7 @@ app.add_middleware(
 # Pydantic models
 class ChatRequest(BaseModel):
     message: str
+    flow_id: str = "PRESENTATION"
 
 class ChatResponse(BaseModel):
     response: str
@@ -93,28 +94,43 @@ def chat_with_gemini(request: ChatRequest):
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
     
     try:
-        # Use RAG if available
-        if rag_service.is_available():
-            # Search knowledge base for relevant context
-            search_results = rag_service.search(request.message, top_k=3, similarity_threshold=0.3)
-            
-            if search_results:
-                # Format context and create RAG-enhanced prompt
-                context = rag_service.format_context(search_results)
-                enhanced_prompt = rag_service.get_rag_prompt(request.message, context)
+        # Route based on flow_id
+        if request.flow_id == "ROADMAP":
+            logger.info("Using ROADMAP flow")
+            response_text = "**Welcome to the Roadmap Builder!** 📋\n\nI'll help you create a strategic roadmap for your business. To get started, please tell me:\n\n• What industry is your business in?\n• What are your main business goals?\n• What's your current stage (startup, growth, expansion)?\n\nLet's build something great together!"
+            return ChatResponse(response=response_text)
+        
+        elif request.flow_id == "DYNAMIC_CV":
+            logger.info("Using DYNAMIC_CV flow")
+            response_text = "**Dynamic CV Generator** 📄\n\nI can help create tailored resumes based on specific job requirements. This feature will be coming soon!\n\nFor now, you can ask me about our services or get general information."
+            return ChatResponse(response=response_text)
+        
+        else:  # PRESENTATION flow (default)
+            logger.info("Using PRESENTATION flow with RAG")
+            # Use RAG if available
+            if rag_service.is_available():
+                # Search knowledge base for relevant context
+                search_results = rag_service.search(request.message, top_k=3, similarity_threshold=0.3)
                 
-                logger.info(f"Using RAG with {len(search_results)} relevant chunks")
-                response = model.generate_content(enhanced_prompt)
+                if search_results:
+                    # Format context and create RAG-enhanced prompt
+                    context = rag_service.format_context(search_results)
+                    enhanced_prompt = rag_service.get_rag_prompt(request.message, context)
+                    
+                    logger.info(f"Using RAG with {len(search_results)} relevant chunks")
+                    response = model.generate_content(enhanced_prompt)
+                    return ChatResponse(response=response.text)
+                else:
+                    logger.info("No relevant context found, using system prompt")
+                    system_prompt = get_system_prompt(request.message)
+                    response = model.generate_content(system_prompt)
+                    return ChatResponse(response=response.text)
             else:
-                logger.info("No relevant context found, using system prompt")
+                # Fallback to direct query without RAG
+                logger.info("RAG not available, using system prompt")
                 system_prompt = get_system_prompt(request.message)
                 response = model.generate_content(system_prompt)
-        else:
-            # Fallback to direct query without RAG
-            logger.info("RAG not available, using system prompt")
-            system_prompt = get_system_prompt(request.message)
-            response = model.generate_content(system_prompt)
+                return ChatResponse(response=response.text)
             
-        return ChatResponse(response=response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error communicating with Gemini API: {str(e)}")

@@ -1,13 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { sendMessage } from '../services/apiService';
+import { useState, useEffect, useRef } from "react";
+import { sendMessage } from "../services/apiService";
+import { FLOW_IDS, getFlowDisplayName } from "../utils/flowConstants";
+import ChatHeader from "./ChatHeader";
+import WelcomeScreen from "./WelcomeScreen";
+import MessageList from "./MessageList";
+import ChatInput from "./ChatInput";
 
 function ChatbotUI() {
-  const [messages, setMessages] = useState([
-    { id: 1, text: "Hello! How can I help you today?", sender: "bot" }
-  ]);
+  const [messages, setMessages] = useState([]);
   const [currentInput, setCurrentInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [flowId, setFlowId] = useState(FLOW_IDS.PRESENTATION);
+  const [showWelcome, setShowWelcome] = useState(true);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -20,101 +24,100 @@ function ChatbotUI() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!currentInput.trim() || isLoading) return;
 
     const userMessage = {
       id: Date.now(),
       text: currentInput.trim(),
-      sender: "user"
+      sender: "user",
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setCurrentInput("");
     setIsLoading(true);
+    setShowWelcome(false);
 
     try {
-      const botResponse = await sendMessage(userMessage.text);
-      
+      const botResponse = await sendMessage(userMessage.text, flowId);
+
       const botMessage = {
         id: Date.now() + 1,
         text: botResponse,
-        sender: "bot"
+        sender: "bot",
       };
 
-      setMessages(prev => [...prev, botMessage]);
+      setMessages((prev) => [...prev, botMessage]);
     } catch (error) {
       const errorMessage = {
         id: Date.now() + 1,
         text: "Sorry, I'm having trouble responding right now. Please try again.",
         sender: "bot",
-        isError: true
+        isError: true,
       };
 
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
   };
 
+  const handleFlowSelection = (selectedFlowId, flowName) => {
+    setFlowId(selectedFlowId);
+    setShowWelcome(false);
+
+    const systemMessage = {
+      id: Date.now(),
+      text: `You selected: ${flowName}. How can I help you?`,
+      sender: "bot",
+    };
+    setMessages([systemMessage]);
+  };
+
+  const handleFlowSwitch = (newFlowId) => {
+    if (newFlowId === flowId) return;
+
+    setFlowId(newFlowId);
+    setShowWelcome(false);
+
+    const switchMessage = {
+      id: Date.now(),
+      text: `Switched to: ${getFlowDisplayName(newFlowId)}. How can I help you?`,
+      sender: "bot",
+    };
+    setMessages([switchMessage]);
+  };
+
   return (
     <div className="chatbot-container">
-      <div className="chat-header">
-        <h2>Growth With Flow Chatbot</h2>
-      </div>
-      
+      <ChatHeader flowId={flowId} onFlowSwitch={handleFlowSwitch} />
+
       <div className="message-area">
-        {messages.map((message) => (
-          <div key={message.id} className={`message ${message.sender}-message`}>
-            <span className={`message-text ${message.isError ? 'error-message' : ''}`}>
-              {message.sender === 'bot' ? (
-                <ReactMarkdown>{message.text}</ReactMarkdown>
-              ) : (
-                message.text
-              )}
-            </span>
-          </div>
-        ))}
-        
-        {isLoading && (
-          <div className="message bot-message">
-            <span className="message-text loading">
-              <div className="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-            </span>
-          </div>
+        {showWelcome && messages.length === 0 && (
+          <WelcomeScreen onFlowSelection={handleFlowSelection} />
         )}
-        <div ref={messagesEndRef} />
-      </div>
-      
-      <form className="input-area" onSubmit={handleSubmit}>
-        <input 
-          type="text" 
-          className="message-input"
-          placeholder="Type your message here..."
-          value={currentInput}
-          onChange={(e) => setCurrentInput(e.target.value)}
-          onKeyPress={handleKeyPress}
-          disabled={isLoading}
+
+        <MessageList
+          messages={messages}
+          isLoading={isLoading}
+          messagesEndRef={messagesEndRef}
         />
-        <button 
-          type="submit" 
-          className="send-button"
-          disabled={isLoading || !currentInput.trim()}
-        >
-          Send
-        </button>
-      </form>
+      </div>
+
+      <ChatInput
+        currentInput={currentInput}
+        setCurrentInput={setCurrentInput}
+        onSubmit={handleSubmit}
+        isLoading={isLoading}
+        onKeyPress={handleKeyPress}
+      />
     </div>
   );
 }
