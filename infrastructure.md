@@ -1,7 +1,6 @@
 # Project Infrastructure Guide
-# Project: Chatbots Growth With Flow
 
-## 1. 🛑 Core Philosophy: COST IS THE ENEMY
+## 1. Core Philosophy: COST IS THE ENEMY
 
 This is the most important rule. The entire infrastructure is designed for **extremely low traffic** and must aim to **stay within the AWS Free Tier**.
 
