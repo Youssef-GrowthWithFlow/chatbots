@@ -1,16 +1,14 @@
 """
 RAG (Retrieval-Augmented Generation) service for knowledge base search.
 """
-
 import os
 import faiss
 import numpy as np
 import pickle
-from typing import List, Dict, Optional
+from typing import List, Dict
 import logging
-from google import genai
-from google.genai import types
-import time
+from .gemini_service import gemini_service
+from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +24,7 @@ class RAGService:
         self.index = None
         self.metadata = None
         self.chunks = None
-        self.embedding_model = "gemini-embedding-001"
         self.is_initialized = False
-        self.client = None
 
     def initialize(self) -> bool:
         """Initialize the RAG service by loading index and metadata."""
@@ -39,7 +35,7 @@ class RAGService:
                 return False
 
             self.index = faiss.read_index(self.index_path)
-            logger.info(f"Loaded FAISS index with {self.index.ntotal} vectors")
+            logger.info(f"✓ Loaded FAISS index with {self.index.ntotal} vectors")
 
             # Load metadata and chunks
             if not os.path.exists(self.metadata_path):
@@ -51,16 +47,7 @@ class RAGService:
                 self.metadata = data["metadata"]
                 self.chunks = data["chunks"]
 
-            logger.info(f"Loaded metadata for {len(self.chunks)} chunks")
-
-            # Initialize Gemini client with explicit API key
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                logger.error("GEMINI_API_KEY not found in environment")
-                return False
-
-            self.client = genai.Client(api_key=api_key)
-            logger.info("Initialized Gemini client for embeddings")
+            logger.info(f"✓ Loaded metadata for {len(self.chunks)} chunks")
 
             self.is_initialized = True
             return True
@@ -69,62 +56,19 @@ class RAGService:
             logger.error(f"Error initializing RAG service: {e}")
             return False
 
-    def _create_embedding_with_retry(
-        self, content: str, task_type: str = "RETRIEVAL_QUERY", max_retries: int = 3
-    ) -> Optional[List[float]]:
-        """
-        Create embedding with retry logic for transient failures.
-
-        Args:
-            content: Text to embed
-            task_type: Type of embedding task
-            max_retries: Maximum number of retry attempts
-
-        Returns:
-            Embedding vector or None if all retries fail
-        """
-        for attempt in range(max_retries):
-            try:
-                result = self.client.models.embed_content(
-                    model=self.embedding_model,
-                    contents=content,
-                    config=types.EmbedContentConfig(task_type=task_type),
-                )
-
-                # Extract embedding from response
-                if hasattr(result, "embeddings") and len(result.embeddings) > 0:
-                    return result.embeddings[0].values
-
-                logger.error(f"Unexpected embedding response format: {result}")
-                return None
-
-            except Exception as e:
-                wait_time = 2**attempt  # Exponential backoff
-                logger.warning(
-                    f"Embedding attempt {attempt + 1}/{max_retries} failed: {e}"
-                )
-
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    logger.error(
-                        f"All {max_retries} embedding attempts failed for content: '{content[:50]}...'"
-                    )
-                    return None
-
-        return None
-
     def search(
-        self, query: str, top_k: int = 3, similarity_threshold: float = 0.5
+        self,
+        query: str,
+        top_k: int = None,
+        similarity_threshold: float = None,
     ) -> List[Dict]:
         """
         Search for relevant chunks in the knowledge base.
 
         Args:
             query: The search query
-            top_k: Number of top results to return
-            similarity_threshold: Minimum similarity score for results
+            top_k: Number of top results to return (defaults to config value)
+            similarity_threshold: Minimum similarity score (defaults to config value)
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -133,9 +77,17 @@ class RAGService:
             logger.warning("RAG service not initialized")
             return []
 
+        if not gemini_service.is_available():
+            logger.warning("Gemini service not available for embeddings")
+            return []
+
+        # Use config defaults if not specified
+        top_k = top_k or config.RAG_TOP_K
+        similarity_threshold = similarity_threshold or config.RAG_SIMILARITY_THRESHOLD
+
         try:
-            # Create embedding for query
-            embedding_values = self._create_embedding_with_retry(
+            # Create embedding for query using gemini_service
+            embedding_values = gemini_service.create_embedding(
                 query, task_type="RETRIEVAL_QUERY"
             )
 
@@ -195,7 +147,6 @@ class RAGService:
         for result in search_results:
             chunk = result["chunk"]
             metadata = result["metadata"]
-            score = result["score"]
 
             # Format chunk with source information
             formatted_chunk = f"[Source: {metadata['filename']}]\n{chunk.strip()}\n"
@@ -215,43 +166,6 @@ class RAGService:
             )
 
         return context
-
-    def get_rag_prompt(self, user_query: str, context: str) -> str:
-        """
-        Create a RAG-enhanced prompt for the LLM.
-
-        Args:
-            user_query: The original user query
-            context: Retrieved context from knowledge base
-
-        Returns:
-            Enhanced prompt with context
-        """
-        if not context:
-            # No relevant context found, use original query
-            return user_query
-
-        prompt = f"""You are a helpful AI assistant for Growth With Flow, a strategic consulting company. Be concise but informative.
-
-LANGUAGE RULE: Always respond in the same language as the user's question (French if French, English if English).
-
-TONE GUIDELINES:
-- Be concise but complete - answer fully in 2-4 sentences
-- Use simple, clear language
-- When asked for lists, provide them with bullet points
-- Use markdown formatting for structure
-- Be warm and professional
-
-Use the following context information to answer the user's question:
-
-Context Information:
-{context}
-
-User Question: {user_query}
-
-Provide a helpful, concise response in the same language as the question."""
-
-        return prompt
 
     def is_available(self) -> bool:
         """Check if RAG service is available and initialized."""

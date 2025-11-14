@@ -3,30 +3,28 @@
 Document ingestion script for RAG pipeline.
 Reads markdown files from knowledge_base/ directory, chunks them, and creates FAISS index.
 """
-
 import os
+import sys
 import glob
 import faiss
 import numpy as np
 import pickle
-from pathlib import Path
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import time
+
+# Add parent directory to path to import app modules
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from app.gemini_service import gemini_service
+from app.config import config
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
 KNOWLEDGE_BASE_DIR = "knowledge_base"
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
 INDEX_PATH = "index.faiss"
 METADATA_PATH = "index_metadata.pkl"
-EMBEDDING_MODEL = "gemini-embedding-001"
-BATCH_SIZE = 100  # Process embeddings in batches for efficiency
 
 
 def read_markdown_files(directory):
@@ -52,8 +50,11 @@ def read_markdown_files(directory):
     return files_data
 
 
-def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
+def chunk_text(text, chunk_size=None, overlap=None):
     """Split text into overlapping chunks using LangChain splitter."""
+    chunk_size = chunk_size or config.RAG_CHUNK_SIZE
+    overlap = overlap or config.RAG_CHUNK_OVERLAP
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
@@ -95,33 +96,47 @@ def process_documents(files_data):
     return all_chunks, metadata
 
 
-def create_embeddings_batch(chunks, client):
+def create_embeddings_batch(chunks):
     """
-    Create embeddings using Gemini API with batch processing and retry logic.
+    Create embeddings using GeminiService with batch processing.
 
     Args:
         chunks: List of text chunks to embed
-        client: Gemini client instance
 
     Returns:
         NumPy array of embeddings
+
+    Raises:
+        Exception: If embedding creation fails
     """
     print(f"Creating embeddings for {len(chunks)} chunks using Gemini...")
     embeddings = []
 
+    batch_size = config.EMBEDDING_BATCH_SIZE
+
     # Process in batches
-    for batch_start in range(0, len(chunks), BATCH_SIZE):
-        batch_end = min(batch_start + BATCH_SIZE, len(chunks))
+    for batch_start in range(0, len(chunks), batch_size):
+        batch_end = min(batch_start + batch_size, len(chunks))
         batch = chunks[batch_start:batch_end]
-        batch_num = (batch_start // BATCH_SIZE) + 1
-        total_batches = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
+        batch_num = (batch_start // batch_size) + 1
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
 
-        print(f"\nProcessing batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+        print(
+            f"\nProcessing batch {batch_num}/{total_batches} ({len(batch)} chunks)..."
+        )
 
-        # Create embeddings for batch with retry logic
-        batch_embeddings = create_batch_with_retry(batch, client)
+        # Create embeddings for batch using gemini_service
+        batch_embeddings = gemini_service.create_embeddings_batch(
+            batch, task_type="RETRIEVAL_DOCUMENT"
+        )
+
+        if not batch_embeddings or len(batch_embeddings) != len(batch):
+            raise Exception(
+                f"Failed to create embeddings for batch {batch_num}. "
+                f"Expected {len(batch)} embeddings, got {len(batch_embeddings) if batch_embeddings else 0}"
+            )
+
         embeddings.extend(batch_embeddings)
-
         print(f"  ✓ Batch {batch_num} completed ({len(embeddings)}/{len(chunks)} total)")
 
     embeddings_array = np.array(embeddings).astype("float32")
@@ -130,51 +145,6 @@ def create_embeddings_batch(chunks, client):
     )
 
     return embeddings_array
-
-
-def create_batch_with_retry(batch, client, max_retries=3):
-    """
-    Create embeddings for a batch with retry logic.
-
-    Args:
-        batch: List of text chunks to embed
-        client: Gemini client instance
-        max_retries: Maximum number of retry attempts
-
-    Returns:
-        List of embedding vectors
-    """
-    for attempt in range(max_retries):
-        try:
-            # Use batch embedding API
-            result = client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                contents=batch,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-            )
-
-            # Extract embeddings from response
-            if hasattr(result, "embeddings"):
-                return [emb.values for emb in result.embeddings]
-            else:
-                print(f"  ✗ Unexpected response format: {result}")
-                raise ValueError("Could not extract embeddings from response")
-
-        except Exception as e:
-            wait_time = 2**attempt  # Exponential backoff
-            print(f"  ⚠ Batch embedding attempt {attempt + 1}/{max_retries} failed: {e}")
-
-            if attempt < max_retries - 1:
-                print(f"  → Retrying in {wait_time} seconds...")
-                time.sleep(wait_time)
-            else:
-                print(f"  ✗ All {max_retries} attempts failed for this batch")
-                # Return zero vectors as fallback
-                print(f"  → Using zero vectors as fallback for {len(batch)} chunks")
-                return [[0.0] * 768 for _ in batch]  # Gemini embedding dimension
-
-    # Should not reach here, but return zero vectors just in case
-    return [[0.0] * 768 for _ in batch]
 
 
 def create_faiss_index(embeddings):
@@ -222,6 +192,13 @@ def main():
         print(f"✗ Knowledge base directory not found: {KNOWLEDGE_BASE_DIR}")
         return
 
+    # Check if Gemini service is available
+    if not gemini_service.is_available():
+        print("✗ Gemini service not initialized. Check GEMINI_API_KEY in .env")
+        return
+
+    print("✓ Gemini service initialized")
+
     # Read markdown files
     files_data = read_markdown_files(KNOWLEDGE_BASE_DIR)
     if not files_data:
@@ -236,19 +213,12 @@ def main():
     print(f"Total chunks created: {len(chunks)}")
     print("-" * 30)
 
-    # Initialize Gemini client
-    print("Initializing Gemini client...")
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("✗ GEMINI_API_KEY not found in environment")
-        return
-
-    client = genai.Client(api_key=api_key)
-    print("✓ Gemini client initialized")
-    print("-" * 30)
-
     # Create embeddings in batches
-    embeddings = create_embeddings_batch(chunks, client)
+    try:
+        embeddings = create_embeddings_batch(chunks)
+    except Exception as e:
+        print(f"✗ Failed to create embeddings: {e}")
+        return
 
     # Create FAISS index
     index = create_faiss_index(embeddings)

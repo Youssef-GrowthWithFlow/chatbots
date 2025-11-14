@@ -1,36 +1,27 @@
-import {
-  FLOW_IDS,
-  FLOW_NAMES,
-  getFlowDisplayName,
-} from "../utils/flowConstants";
-
-function ChatHeader({ flowId, onFlowSwitch }) {
+function ChatHeader({ onNewChat }) {
   return (
-    <div className="chat-header">
+    <header className="chat-header">
       <div className="header-content">
-        <div className="header-title">
-          <h2>Growth With Flow Chatbot</h2>
-          <span className="current-flow">• {getFlowDisplayName(flowId)}</span>
-        </div>
-        <div className="flow-selector">
-          <select
-            value={flowId}
-            onChange={(e) => onFlowSwitch(e.target.value)}
-            className="flow-dropdown"
+        <h1 className="header-title">Growth With Flow</h1>
+        <button
+          onClick={onNewChat}
+          className="new-chat-btn"
+          title="Start new conversation"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
           >
-            <option value={FLOW_IDS.PRESENTATION}>
-              {FLOW_NAMES[FLOW_IDS.PRESENTATION]}
-            </option>
-            <option value={FLOW_IDS.ROADMAP}>
-              {FLOW_NAMES[FLOW_IDS.ROADMAP]}
-            </option>
-            <option value={FLOW_IDS.DYNAMIC_CV}>
-              {FLOW_NAMES[FLOW_IDS.DYNAMIC_CV]}
-            </option>
-          </select>
-        </div>
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          New chat
+        </button>
       </div>
-    </div>
+    </header>
   );
 }
 

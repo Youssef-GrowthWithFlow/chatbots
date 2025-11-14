@@ -94,7 +94,9 @@ cdk destroy
 
 ### Backend (`backend/`)
 - `app/main.py`: FastAPI application entry point, defines routes (`/health`, `/chat`), handles flow routing, loads RAG index at startup
+- `app/gemini_service.py`: Centralized Gemini API service singleton with retry logic for all API calls (chat, streaming, embeddings)
 - `app/rag_service.py`: RAG service singleton that loads FAISS index, performs vector search, formats context for LLM prompts
+- `app/config.py`: Centralized configuration for all settings (model names, temperatures, batch sizes, etc.)
 - `ingest.py`: Standalone script to build FAISS index from markdown files in `knowledge_base/`, generates `index.faiss` and `index_metadata.pkl`
 - `Dockerfile`: Builds backend container image
 
@@ -103,8 +105,8 @@ cdk destroy
 - `components/ChatbotUI.jsx`: Main chat component managing state, messages, and flow selection
 - `components/WelcomeScreen.jsx`: Initial screen with flow selection buttons
 - `components/ChatHeader.jsx`, `ChatInput.jsx`, `MessageList.jsx`: UI subcomponents
-- `services/apiService.js`: Axios-based service for `/chat` API calls
-- `utils/`: Helper functions (if any)
+- `services/apiService.js`: Service for `/chat` API calls with automatic session management
+- `utils/`: Helper functions and constants
 
 ### Knowledge Base (`knowledge_base/`)
 Markdown files containing company information used by RAG:
@@ -149,6 +151,30 @@ Format: `<type>: <description>`
 
 ## Testing Strategy
 
+**IMPORTANT: Always use Docker Compose for testing. DO NOT run Python commands directly.**
+
+### Local Testing
+```bash
+# Build and start all services
+docker-compose up --build
+
+# Run in detached mode
+docker-compose up -d --build
+
+# View logs
+docker-compose logs -f backend
+docker-compose logs -f frontend
+
+# Stop services
+docker-compose down
+```
+
+**Why Docker Compose?**
+- Python dependencies are only installed in Docker containers, not locally
+- Ensures consistent environment between development and production
+- Tests the actual containerized application that will be deployed
+
+### Unit/Integration Testing
 Focus on testing logic, not boilerplate:
 - **Backend**: Test service functions (e.g., `rag_service.search()`) and API contracts using FastAPI TestClient
 - **Frontend**: Test user interactions with React Testing Library, not component appearance
@@ -198,45 +224,115 @@ GEMINI_API_KEY=your_api_key_here
 This project uses the **new `google-genai` SDK** (v1.0.0+), which reached General Availability in May 2025. The legacy `google-generativeai` library is deprecated and will stop receiving updates on November 30, 2025.
 
 ### Model Selection
-- **Current model**: `gemini-2.0-flash-exp` (configurable in `main.py`)
-- **Embedding model**: `gemini-embedding-001` (for RAG)
-- Models can be changed by updating the model name in API calls
+- **Current model**: `gemini-2.0-flash-exp` (configurable in `config.py`)
+- **Embedding model**: `gemini-embedding-001` (configurable in `config.py`)
+- Models can be changed by updating values in `app/config.py`
+
+### Architecture: Centralized GeminiService
+
+All Gemini API interactions go through `app/gemini_service.py`, a singleton service that provides:
+
+- `send_chat_message()`: Send message in multi-turn conversation (with retry logic)
+- `get_or_create_chat_session()`: Manage chat sessions by session_id
+- `get_chat_history()`: Retrieve conversation history for a session
+- `clear_chat_session()`: Clear a session from memory
+- `fetch_url_content()`: Fetch content from URLs using url_context tool
+- `create_embedding()`: Single embedding with retry logic
+- `create_embeddings_batch()`: Batch embeddings with retry logic
+
+**Key Benefits:**
+- Single point of configuration
+- Consistent retry logic across all API calls
+- Automatic conversation history management
+- No duplicate client initialization
+- Easy to mock for testing
+
+**Multi-Turn Conversations:**
+- Uses Gemini's built-in chat session API (`client.chats.create()`)
+- Conversation history is automatically maintained by the SDK
+- Sessions are stored in memory (keyed by `session_id`)
+- Frontend generates unique `session_id` per browser tab using sessionStorage
 
 ### Best Practices Implemented
 
-1. **Error Handling with Retry Logic**
+1. **Centralized Configuration** (`app/config.py`)
+   - All model names, temperatures, batch sizes in one place
+   - Environment variables loaded once at startup
+   - Single source of truth for all settings
+
+2. **Error Handling with Retry Logic**
    - All Gemini API calls use exponential backoff retry (3 attempts)
-   - Implemented in `rag_service._create_embedding_with_retry()` and `main.generate_content_with_retry()`
+   - Implemented in `gemini_service._retry_with_backoff()`
    - Prevents transient failures from breaking the user experience
 
-2. **Batch Embedding Processing**
-   - `ingest.py` processes embeddings in batches of 100 chunks
+3. **Batch Embedding Processing**
+   - `ingest.py` processes embeddings in batches (configurable via `config.EMBEDDING_BATCH_SIZE`)
    - Significantly faster than one-by-one processing
    - Reduces API calls and improves efficiency
 
-3. **Streaming Responses**
-   - Chat endpoint supports streaming via `stream: true` parameter
-   - Frontend uses Server-Sent Events (SSE) to display responses in real-time
-   - Improves perceived performance and UX
-   - Toggle streaming in `apiService.js` (currently enabled by default)
+4. **Multi-Turn Conversations (No Streaming)**
+   - Chat endpoint uses Gemini's built-in multi-turn conversation API
+   - Conversation history is automatically maintained across messages
+   - Simple JSON request/response (no Server-Sent Events)
+   - Each session maintains full context for coherent conversations
+   - Reduces complexity compared to manual streaming implementation
 
-4. **Proper Task Types for Embeddings**
+5. **Proper Task Types for Embeddings**
    - `RETRIEVAL_DOCUMENT`: Used when indexing documents in `ingest.py`
    - `RETRIEVAL_QUERY`: Used when searching with user queries in `rag_service.py`
-   - This optimization improves RAG search accuracy
+   - This optimization improves RAG search accuracy per official docs
 
-5. **Environment-Based API Key Management**
-   - Client automatically reads `GEMINI_API_KEY` from environment
-   - Never hardcode API keys in source code
+6. **URL Context Tool**
+   - Uses official `url_context` tool instead of grounding for URL fetching
+   - Cleaner, more reliable than previous google_search approach
+   - Follows official Gemini API documentation
 
-### Streaming vs Non-Streaming
+### Using the GeminiService
 
-**Backend** (`main.py`):
-- Non-streaming: `generate_content_with_retry()` - returns full text
-- Streaming: `generate_content_stream()` - yields chunks via SSE
+```python
+from app.gemini_service import gemini_service
+from app.config import config
 
-**Frontend** (`apiService.js`):
-- Non-streaming: `sendMessage()` - waits for full response
-- Streaming: `sendMessageStream()` - calls `onChunk` callback for each chunk
+# Check availability
+if gemini_service.is_available():
+    # Multi-turn conversation
+    session_id = "user_123"
+    system_instruction = "You are a helpful assistant."
 
-To disable streaming, set `stream: false` in the ChatRequest model.
+    response = gemini_service.send_chat_message(
+        session_id=session_id,
+        message="Hello!",
+        system_instruction=system_instruction  # Only used for new sessions
+    )
+    print(response)
+
+    # Get conversation history
+    history = gemini_service.get_chat_history(session_id)
+    for msg in history:
+        print(f"{msg['role']}: {msg['content']}")
+
+    # Clear session when done
+    gemini_service.clear_chat_session(session_id)
+
+    # Single embedding
+    embedding = gemini_service.create_embedding(text, task_type="RETRIEVAL_QUERY")
+
+    # Batch embeddings
+    embeddings = gemini_service.create_embeddings_batch(texts, task_type="RETRIEVAL_DOCUMENT")
+```
+
+### Frontend Session Management
+
+The frontend automatically manages session IDs using sessionStorage:
+
+```javascript
+import { sendMessage, clearSession } from './services/apiService';
+
+// Send a message (session_id is automatically managed)
+const response = await sendMessage("Hello!", "PRESENTATION");
+
+// Start a new conversation (clear session)
+clearSession();
+```
+
+Session IDs are unique per browser tab and persist across page refreshes within the same tab.

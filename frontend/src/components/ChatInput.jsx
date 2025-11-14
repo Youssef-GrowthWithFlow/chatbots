@@ -7,22 +7,24 @@ function ChatInput({
 }) {
   return (
     <form className="input-area" onSubmit={onSubmit}>
-      <input
-        type="text"
-        className="message-input"
-        placeholder="Type your message here..."
-        value={currentInput}
-        onChange={(e) => setCurrentInput(e.target.value)}
-        onKeyPress={onKeyPress}
-        disabled={isLoading}
-      />
-      <button
-        type="submit"
-        className="send-button"
-        disabled={isLoading || !currentInput.trim()}
-      >
-        Send
-      </button>
+      <div className="input-container">
+        <textarea
+          className="message-input"
+          placeholder="Type your message here..."
+          value={currentInput}
+          onChange={(e) => setCurrentInput(e.target.value)}
+          onKeyDown={onKeyPress}
+          disabled={isLoading}
+          rows="1"
+        />
+        <button
+          type="submit"
+          className="send-button"
+          disabled={isLoading || !currentInput.trim()}
+        >
+          {isLoading ? "..." : "Send"}
+        </button>
+      </div>
     </form>
   );
 }
