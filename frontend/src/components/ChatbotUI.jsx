@@ -4,12 +4,14 @@ import ChatHeader from "./ChatHeader";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
 import CVFlowManager from "./CVFlowManager";
+import ResumeModal from "./resume/ResumeModal";
 
 function ChatbotUI() {
   const [messages, setMessages] = useState([]);
   const [currentInput, setCurrentInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showCVFlow, setShowCVFlow] = useState(false);
+  const [showDebugResume, setShowDebugResume] = useState(false); // DEBUG
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -215,6 +217,34 @@ function ChatbotUI() {
         isLoading={isLoading}
         onKeyPress={handleKeyPress}
       />
+
+      {/* DEBUG: Button to show resume design */}
+      <button
+        onClick={() => setShowDebugResume(true)}
+        style={{
+          position: "fixed",
+          bottom: "20px",
+          right: "20px",
+          padding: "10px 20px",
+          background: "#667eea",
+          color: "white",
+          border: "none",
+          borderRadius: "8px",
+          cursor: "pointer",
+          fontWeight: "500",
+          zIndex: 999,
+        }}
+      >
+        🎨 View Resume Design
+      </button>
+
+      {/* DEBUG: Dummy Resume Modal */}
+      {showDebugResume && (
+        <ResumeModal
+          resumeId="debug-dummy"
+          onClose={() => setShowDebugResume(false)}
+        />
+      )}
     </div>
   );
 }

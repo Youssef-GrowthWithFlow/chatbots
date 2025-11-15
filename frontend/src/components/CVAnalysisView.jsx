@@ -1,5 +1,5 @@
 import { useState } from "react";
-import ResumeModal from "./ResumeModal";
+import ResumeModal from "./resume/ResumeModal";
 
 function CVAnalysisView({ data }) {
   const {
